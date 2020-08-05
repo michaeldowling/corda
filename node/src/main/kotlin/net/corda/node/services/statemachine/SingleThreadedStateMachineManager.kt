@@ -935,6 +935,18 @@ internal class SingleThreadedStateMachineManager(
         }
         )
 
+    override fun finishedFlowsWithClientIds(): List<Triple<StateMachineRunId, String, Boolean>> {
+        return innerState.withLock {
+            clientIdsToFlowIds.asSequence()
+                .filter { (_, status) -> status is FlowWithClientIdStatus.Removed }
+                .map { (clientId, status) ->
+                    status as FlowWithClientIdStatus.Removed
+                    Triple(status.flowId, clientId, status.succeeded)
+                }
+                .toList()
+        }
+    }
+
     override fun removeClientId(clientId: String): Boolean {
         var removedFlowId: StateMachineRunId? = null
         innerState.withLock {

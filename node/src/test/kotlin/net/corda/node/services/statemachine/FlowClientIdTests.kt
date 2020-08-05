@@ -19,6 +19,8 @@ import net.corda.testing.node.internal.TestStartedNode
 import net.corda.testing.node.internal.startFlow
 import net.corda.testing.node.internal.startFlowWithClientId
 import net.corda.core.flows.KilledFlowException
+import net.corda.core.internal.concurrent.transpose
+import net.corda.core.utilities.minutes
 import org.junit.After
 import org.junit.Assert
 import org.junit.Before
@@ -30,6 +32,7 @@ import java.sql.SQLTransientConnectionException
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
+import kotlin.streams.toList
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
@@ -672,18 +675,61 @@ class FlowClientIdTests {
         assertEquals("Flow's ${flowHandle0!!.id} exception was not found in the database. Something is very wrong.", e.message)
     }
 
+    @Test(timeout = 300_000)
+    fun `finishedFlowsWithClientIds returns completed flows with client ids`() {
+        val clientIds = listOf("a", "b", "c", "d", "e")
+        val lock = Semaphore(0)
+        ResultFlow.hook = { clientId ->
+            if (clientId == clientIds[3]) {
+                throw IllegalStateException("This didn't go so well")
+            }
+            if (clientId == clientIds[4]) {
+                lock.acquire()
+            }
+        }
+        val flows = listOf(
+            aliceNode.services.startFlowWithClientId(clientIds[0], ResultFlow(10)),
+            aliceNode.services.startFlowWithClientId(clientIds[1], ResultFlow(10)),
+            aliceNode.services.startFlowWithClientId(clientIds[2], ResultFlow(10))
+        )
+        val failedFlow = aliceNode.services.startFlowWithClientId(clientIds[3], ResultFlow(10))
+        val runningFlow = aliceNode.services.startFlowWithClientId(clientIds[4], NeverEndingFlow(10))
+        flows.map { it.resultFuture }.transpose().getOrThrow(30.seconds)
+        assertFailsWith<IllegalStateException> { failedFlow.resultFuture.getOrThrow(20.seconds) }
+
+        val flowIds = flows.map { it.id } + failedFlow.id + runningFlow.id
+        val finishedFlows = aliceNode.smm.finishedFlowsWithClientIds().toList()
+
+        lock.release()
+
+        assertEquals(4, finishedFlows.size)
+        assertEquals(3, finishedFlows.filter { (_, _, successful) -> successful }.size)
+        assertEquals(1, finishedFlows.filterNot { (_, _, successful) -> successful }.size)
+        assertEquals(setOf("a", "b", "c", "d"), finishedFlows.map { (_, clientId, _) -> clientId }.toSet())
+        assertEquals((flowIds - runningFlow.id).toSet(), finishedFlows.map { (flowId, _, _) -> flowId }.toSet())
+    }
+
 }
 
 internal class ResultFlow<A>(private val result: A): FlowLogic<A>() {
     companion object {
-        var hook: (() -> Unit)? = null
+        var hook: ((String?) -> Unit)? = null
         var suspendableHook: FlowLogic<Unit>? = null
     }
 
     @Suspendable
     override fun call(): A {
-        hook?.invoke()
+        hook?.invoke(stateMachine.clientId)
         suspendableHook?.let { subFlow(it) }
+        return result
+    }
+}
+
+internal class NeverEndingFlow<A>(private val result: A): FlowLogic<A>() {
+
+    @Suspendable
+    override fun call(): A {
+        sleep(3.minutes)
         return result
     }
 }

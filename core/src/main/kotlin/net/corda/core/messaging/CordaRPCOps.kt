@@ -288,6 +288,8 @@ interface CordaRPCOps : RPCOps {
      */
     fun killFlow(id: StateMachineRunId): Boolean
 
+    fun finishedFlowsWithClientIds(): List<Triple<StateMachineRunId, String, Boolean>>
+
     /**
      * Removes a flow's [clientId] to result/ exception mapping. If the mapping is of a running flow, then the mapping will not get removed.
      *

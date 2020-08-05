@@ -99,6 +99,8 @@ interface StateMachineManager {
      */
     fun snapshot(): Set<FlowStateMachineImpl<*>>
 
+    fun finishedFlowsWithClientIds(): List<Triple<StateMachineRunId, String, Boolean>>
+
     /**
      * Removes a flow's [clientId] to result/ exception mapping.
      *
